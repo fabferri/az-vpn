@@ -56,9 +56,9 @@ properties:
    services: "Azure VPN"
    authors: "fabferri"
 tags:
-   ms.service: "Configuration-Example-Azure"
-   ms.topic: "article"
-   ms.tgt_pltfrm: "Azure"
-   ms.date: "29/06/2026"
-   ms.author: "fabferri"
+   service: "Configuration-Example-Azure"
+   topic: "article"
+   tgt_pltfrm: "Azure"
+   date: "29/06/2026"
+   author: "fabferri"
 -->
