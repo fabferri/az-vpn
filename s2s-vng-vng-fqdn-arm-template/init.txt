@@ -1,0 +1,3 @@
+ResourceGroupName=vpn05
+location1=northeurope
+location2=northeurope
