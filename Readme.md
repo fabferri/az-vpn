@@ -1,21 +1,3 @@
-<properties
-   pageTitle="Examples of Azure VPN"
-   description="Examples of Azure VPN, ARM templates, scripts"
-   services="Azure VPN"
-   documentationCenter="na"
-   authors="fabferri"
-   manager=""
-   editor=""/>
-
-<tags
-   ms.service="Configuration-Example-Azure"
-   ms.devlang="na"
-   ms.topic="article"
-   ms.tgt_pltfrm="Azure"
-   ms.workload="na"
-   ms.date="29/06/2026"
-   ms.author="fabferri" />
-
 # Azure VPN examples
 
 - `Azure S2S VPN - VNG to VNG`
@@ -66,3 +48,17 @@
 
 - `VPN Customer Controlled Maintenance`
   - [VPN Customer Controlled Maintenance](https://github.com/fabferri/az-vpn/tree/main/vpn-customer-controlled%20maintenance) [date: 11-02-2026]
+
+<!--
+properties:
+   pageTitle: "Examples of Azure VPN"
+   description: "Examples of Azure VPN, ARM templates, scripts"
+   services: "Azure VPN"
+   authors: "fabferri"
+tags:
+   ms.service: "Configuration-Example-Azure"
+   ms.topic: "article"
+   ms.tgt_pltfrm: "Azure"
+   ms.date: "29/06/2026"
+   ms.author: "fabferri"
+-->
