@@ -18,7 +18,7 @@
 
 # Azure VPN examples
 
-- Azure S2S VPN - VNG to VNG
+- `Azure S2S VPN - VNG to VNG`
   - [ARM template to create Site-to-Site VPN between two VPN Gateways](https://github.com/fabferri/az-vpn/tree/main/s2s-vng-vng-active-active-bgp-arm-template) [date: 11-08-2021]
   - [Site-to-Site VPN between two Azure VPN Gateways in active-active mode with BGP routing deployed by powershell](https://github.com/fabferri/az-vpn/tree/main/s2s-vng-vng-active-active-bgp-powershell) [date: 15-01-2025]
   - [Site-to-Site VPN between two Azure VPN Gateways deployed through Terraform](https://github.com/fabferri/az-vpn/tree/main/s2s-vng-vng-active-active-bgp-terraform) [date: 09-01-2025]
@@ -43,7 +43,7 @@
   - [Multiple VNet-to-VNet connections with VPN Gateways in a Partial Mesh configuration](https://github.com/fabferri/az-vpn/tree/main/vpn-vnet-2-vnet) [date: 25-11-2025]
   - [Summarization of address prefixes advertised over Site-to-Site VPN](https://github.com/fabferri/az-vpn/tree/main/summarization-prefixes-s2s-vng-vng-active-active-bgp) [date: 23-06-2026]
 
-- Azure S2S VPN - VNG to NVA
+- `Azure S2S VPN: VNG - NVA`
   - [Single Site-to-Site IPsec tunnel between Azure VPN Gateway and Juniper vSRX](https://github.com/fabferri/az-vpn/tree/main/s2s-vng-srx-1-tunnel-arm-template) [date: 26-11-2024]
   - [Two Site-to-Site IPsec tunnels between Azure VPN Gateway and Juniper vSRX](https://github.com/fabferri/az-vpn/tree/main/s2s-vng-srx-2-tunnels-arm-template) [date: 28-11-2024]
   - [Site-to-Site IPsec tunnels between Azure VPN Gateway and Cisco Catalyst 8000v](https://github.com/fabferri/az-vpn/tree/main/s2s-vng-catalyst-ipv4-arm-template) [date: 02-07-2025]
@@ -53,16 +53,16 @@
   - [Building Azure-to-StrongSwan Site-to-Site VPN with X.509 Digital Certificates](https://github.com/fabferri/az-vpn/tree/main/s2s-vng-strongswan-digitalcert-custom-policy) [date: 29-06-2026]
   - [Using Windows Server 2019 as NVA for site-to-site VPN](https://github.com/fabferri/az-vpn/tree/main/s2s-vng-winvm) [date: 12-03-2021]
 
-- Azure S2S VPN - Routing
+- `Azure S2S VPN - Routing`
   - [Azure VPN Gateway Routing and Connection by Azure library for Python](https://github.com/fabferri/az-vpn/tree/main/s2s-vng-routing-table-python) [date: 08-09-2025]
 
-- Azure P2S VPN
+- `Azure P2S VPN`
   - [Workshop: Point-to-Site VPN configuration](https://github.com/fabferri/az-vpn/tree/main/p2s-arm-template) [date: 15-04-2024]
   - [Multipool address for P2S connection in Azure VPN Gateway by ARM template](https://github.com/fabferri/az-vpn/tree/main/p2s-vng-multipool-address-arm-template) [date: 03-04-2025]
   - [Multipool address for P2S connection in Azure VPN Gateway by powershell](https://github.com/fabferri/az-vpn/tree/main/p2s-vng-multipool-address-powershell) [date: 18-03-2025]
 
-- Azure DNS Private Resolver
+- `Azure DNS Private Resolver`
   - [Configuration with Azure DNS private resolver](https://github.com/fabferri/az-vpn/tree/main/dns-private-resolver-arm-template) [date: 16-06-2023]
 
-- VPN Customer Controlled Maintenance
+- `VPN Customer Controlled Maintenance`
   - [VPN Customer Controlled Maintenance](https://github.com/fabferri/az-vpn/tree/main/vpn-customer-controlled%20maintenance) [date: 11-02-2026]
