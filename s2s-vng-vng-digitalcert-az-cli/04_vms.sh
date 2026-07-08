@@ -78,24 +78,58 @@ CreateVM() {
     ## Create VNet if it doesn't exist ##
     if az network vnet show --resource-group "$rgName" --name "$vnetName" &>/dev/null; then
         echo "$(date) - vnet: $vnetName exists, skipping"
+
+        # Ensure required subnets exist even when VNet already exists.
+        if ! az network vnet subnet show --resource-group "$rgName" --vnet-name "$vnetName" --name "$subnet1Name" &>/dev/null; then
+            echo "$(date) - creating missing subnet '$subnet1Name' in vnet '$vnetName'"
+            az network vnet subnet create \
+                --resource-group "$rgName" \
+                --vnet-name "$vnetName" \
+                --name "$subnet1Name" \
+                --address-prefix "$subnet1Prefix" >/dev/null || {
+                echo "$(date) - ERROR: failed to create subnet '$subnet1Name' in vnet '$vnetName'"
+                exit 1
+            }
+        fi
+
+        if ! az network vnet subnet show --resource-group "$rgName" --vnet-name "$vnetName" --name "$subnet2Name" &>/dev/null; then
+            echo "$(date) - creating missing subnet '$subnet2Name' in vnet '$vnetName'"
+            az network vnet subnet create \
+                --resource-group "$rgName" \
+                --vnet-name "$vnetName" \
+                --name "$subnet2Name" \
+                --address-prefix "$subnet2Prefix" >/dev/null || {
+                echo "$(date) - ERROR: failed to create subnet '$subnet2Name' in vnet '$vnetName'"
+                exit 1
+            }
+        fi
     else
         az network vnet create \
             --resource-group "$rgName" \
             --name "$vnetName" \
             --address-prefix "$addrPrefix" \
-            --location "$location"
+            --location "$location" >/dev/null || {
+            echo "$(date) - ERROR: failed to create vnet '$vnetName'"
+            exit 1
+        }
         
         az network vnet subnet create \
             --resource-group "$rgName" \
             --vnet-name "$vnetName" \
             --name "$subnet1Name" \
-            --address-prefix "$subnet1Prefix"
+            --address-prefix "$subnet1Prefix" >/dev/null || {
+            echo "$(date) - ERROR: failed to create subnet '$subnet1Name' in vnet '$vnetName'"
+            exit 1
+        }
         
         az network vnet subnet create \
             --resource-group "$rgName" \
             --vnet-name "$vnetName" \
             --name "$subnet2Name" \
-            --address-prefix "$subnet2Prefix"
+            --address-prefix "$subnet2Prefix" >/dev/null || {
+            echo "$(date) - ERROR: failed to create subnet '$subnet2Name' in vnet '$vnetName'"
+            exit 1
+        }
         
         echo "$(date) - vnet: $vnetName created"
     fi
@@ -112,7 +146,10 @@ CreateVM() {
             --vnet-name "$vnetName" \
             --subnet "$subnet1Name" \
             --public-ip-address "$vmPubIP" \
-            --network-security-group "$nsgName"
+            --network-security-group "$nsgName" >/dev/null || {
+            echo "$(date) - ERROR: failed to create NIC '$nicName' on subnet '$subnet1Name'"
+            exit 1
+        }
     fi
 
     ## Create VM ##
@@ -131,9 +168,47 @@ CreateVM() {
             --admin-username "$adminUsername" \
             --admin-password "$adminPassword" \
             --os-disk-name "${vmName}-OSdisk" \
-            --boot-diagnostics-storage ""
+            --os-disk-delete-option Delete \
+            --boot-diagnostics-storage "" >/dev/null || {
+            echo "$(date) - ERROR: failed to create VM '$vmName'"
+            exit 1
+        }
         echo "$(date) - VM: $vmName has been deployed."
     fi
+}
+
+run_remote_script_on_vm() {
+    local rgName="$1"
+    local vmName="$2"
+    local installOutput=""
+    local verifyOutput=""
+
+    echo "$(date) - running remote nginx install script on VM '$vmName'"
+    installOutput=$(az vm run-command invoke \
+        --resource-group "$rgName" \
+        --name "$vmName" \
+        --command-id RunShellScript \
+        --scripts "bash -lc 'set -euo pipefail; export DEBIAN_FRONTEND=noninteractive; apt-get update -y; apt-get install -y nginx; systemctl enable nginx; systemctl restart nginx'" \
+        --query "value[0].message" -o tsv 2>&1)
+    if [ $? -ne 0 ]; then
+        echo "$installOutput"
+        echo "$(date) - ERROR: failed running remote nginx install script on VM '$vmName'"
+        exit 1
+    fi
+
+    verifyOutput=$(az vm run-command invoke \
+        --resource-group "$rgName" \
+        --name "$vmName" \
+        --command-id RunShellScript \
+        --scripts "command -v nginx >/dev/null 2>&1 || exit 10; systemctl is-active --quiet nginx || exit 11; echo NGINX_READY" \
+        --query "value[0].message" -o tsv 2>&1)
+    if [ $? -ne 0 ] || ! echo "$verifyOutput" | grep -q "NGINX_READY"; then
+        echo "$verifyOutput"
+        echo "$(date) - ERROR: nginx verification failed on VM '$vmName'"
+        exit 1
+    fi
+
+    echo "$(date) - remote nginx install script completed on VM '$vmName'"
 }
 
 ################### Start of the main script ###################
@@ -143,13 +218,13 @@ inputParamsFile="$pathFiles/$inputParams"
 
 location='uksouth'
 vnet1Name='vnet1'
-vnet1subnet1Name='Tenant'
+vnet1subnet1Name='subnet1'
 vnet1Address='10.1.0.0/16'
 gw1SubnetAddress='10.1.0.0/24'
 vnet1subnet1Address='10.1.1.0/24'
 
 vnet2Name='vnet2'
-vnet2subnet1Name='Tenant'
+vnet2subnet1Name='subnet1'
 vnet2Address='10.2.0.0/16'
 gw2SubnetAddress='10.2.0.0/24'
 vnet2subnet1Address='10.2.1.0/24'
@@ -159,6 +234,9 @@ vmOffer="ubuntu-24_04-lts"
 vmSKU="server"
 vmVersion="latest"
 vmSize="Standard_B2s"
+vm1Name="vm1"
+vm2Name="vm2"
+runRemoteScript="true"  # Set to true to run the remote script on the VMs after creation
 
 # Read parameters from JSON file
 if [ ! -f "$inputParamsFile" ]; then
@@ -171,6 +249,10 @@ rgName=$(jq -r '.rgName' "$inputParamsFile")
 adminUsername=$(jq -r '.adminUsername' "$inputParamsFile")
 adminPassword=$(jq -r '.adminPassword' "$inputParamsFile")
 
+# Runtime controls (optional):
+# - RUN_REMOTE_SCRIPT=true|false (overrides in-file default)
+runRemoteScript="${RUN_REMOTE_SCRIPT:-$runRemoteScript}"
+
 # Check the values of variables
 echo "$(date) - values from file: $inputParams"
 if [ -z "$subscriptionName" ] || [ "$subscriptionName" == "null" ]; then echo 'variable subscriptionName is null'; exit 1; else echo "  subscription name.....: $subscriptionName"; fi
@@ -181,14 +263,27 @@ if [ -z "$adminPassword" ] || [ "$adminPassword" == "null" ]; then echo 'variabl
 # Set subscription
 az account set --subscription "$subscriptionName"
 
+
 ## Create VM1 ##
 CreateVM "$rgName" "$location" "$vnet1Name" "$vnet1subnet1Name" "GatewaySubnet" \
     "$vnet1Address" "$vnet1subnet1Address" "$gw1SubnetAddress" \
     "$vmPublisher" "$vmOffer" "$vmSKU" "$vmVersion" "$vmSize" \
-    "vm1" "$adminUsername" "$adminPassword"
+    "$vm1Name" "$adminUsername" "$adminPassword"
+
+if [ "$runRemoteScript" = "true" ]; then
+    run_remote_script_on_vm "$rgName" "$vm1Name"
+fi
+
 
 ## Create VM2 ##
 CreateVM "$rgName" "$location" "$vnet2Name" "$vnet2subnet1Name" "GatewaySubnet" \
     "$vnet2Address" "$vnet2subnet1Address" "$gw2SubnetAddress" \
     "$vmPublisher" "$vmOffer" "$vmSKU" "$vmVersion" "$vmSize" \
-    "vm2" "$adminUsername" "$adminPassword"
+    "$vm2Name" "$adminUsername" "$adminPassword"
+
+if [ "$runRemoteScript" = "true" ]; then
+    run_remote_script_on_vm "$rgName" "$vm2Name"
+fi
+
+echo "$(date) - VM provisioning workflow completed"
+exit 0

@@ -13,13 +13,15 @@ certLeafSubject1='s2s-cert1'
 certLeafSubject2='s2s-cert2'
 
 # The variable specifies the local folder to store the digital certificates
-pathFiles="$(dirname "$0")"
+pathFiles="$(pwd)"
 certPath="$pathFiles/certs/"
 
 echo "folder to store digital certificates: $certPath"
 
-# Create a local folder: ./certs/
-mkdir -p "$certPath"
+# Create a local folder: ./certs/ if doesn't exists
+if [ ! -d "$certPath" ]; then
+    mkdir -p "$certPath"
+fi
 echo ''
 
 # Generate Root Certificate 1

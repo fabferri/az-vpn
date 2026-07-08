@@ -1,6 +1,6 @@
 {
-    "subscriptionName": "Hybrid-PM-Test-1",
-    "rgName": "s2s-cert2-azcli-102",
+    "subscriptionName": "Hybrid-PM-Test-2",
+    "rgName": "s2s-cert-azcli",
     "adminUsername": "ADMINISTRATOR_USERNAME_GOES_HERE",
     "adminPassword": "ADMINISTRATOR_PASSWORD_GOES_HERE"
 }

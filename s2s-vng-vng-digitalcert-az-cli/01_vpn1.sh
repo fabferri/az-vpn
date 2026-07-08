@@ -5,19 +5,19 @@
 
 vnet1Name='vnet1'
 gw1Name='gw1'
-gw1pubIP1Name="${gw1Name}pip"
+
 
 gw1UserIdentityName='gw1-s2s-kv'
 gw1ConfigName='gw1-config'
 location='uksouth'
 
-vnet1subnet1Name='Tenant'
-vnet1Address='10.1.0.0/16'
+vnet1subnet1Name='subnet1'
+vnetAddress='10.1.0.0/16'
 gw1SubnetAddress='10.1.0.0/24'
 vnet1subnet1Address='10.1.1.0/24'
 gw1OutboundCertName='gw1-cert'
 
-pathFiles="$(dirname "$0")"
+pathFiles="$(pwd)"
 inputParams='init.json'
 inputParamsFile="$pathFiles/$inputParams"
 
@@ -36,12 +36,98 @@ if [ -z "$subscriptionName" ] || [ "$subscriptionName" == "null" ]; then echo 'v
 if [ -z "$rgName" ] || [ "$rgName" == "null" ]; then echo 'variable rgName is null'; exit 1; else echo "   resource group name...: $rgName"; fi
 
 # Generate unique Key Vault name
-seed="$rgName-$gw1Name"
-suffix=$(echo -n "$seed" | sha256sum | cut -c1-6)
+seed="$subscriptionName-$rgName-$gw1Name"
+suffix=$(echo -n "$seed" | sha256sum | cut -c1-8)
 keyVault1Name="kv-$gw1Name-$suffix"
 
 # Set subscription
 az account set --subscription "$subscriptionName"
+
+# RBAC propagation retry settings (override via environment variables)
+rbacPropagationMaxAttempts="${RBAC_PROPAGATION_MAX_ATTEMPTS:-12}"
+rbacPropagationSleepSeconds="${RBAC_PROPAGATION_SLEEP_SECONDS:-5}"
+rbacPropagationTimeoutSeconds="${RBAC_PROPAGATION_TIMEOUT_SECONDS:-}"
+
+# If timeout is set, it takes precedence and derives max attempts from sleep interval.
+if [ -n "$rbacPropagationTimeoutSeconds" ]; then
+    if [ "$rbacPropagationSleepSeconds" -le 0 ] 2>/dev/null; then
+        echo "$(date) - ERROR: RBAC_PROPAGATION_SLEEP_SECONDS must be > 0"
+        exit 1
+    fi
+    rbacPropagationMaxAttempts=$(( (rbacPropagationTimeoutSeconds + rbacPropagationSleepSeconds - 1) / rbacPropagationSleepSeconds ))
+fi
+
+echo "$(date) - RBAC propagation settings: attempts=$rbacPropagationMaxAttempts sleep=${rbacPropagationSleepSeconds}s"
+
+# VPN gateway identity assignment retry settings (override via environment variables)
+gatewayIdentityAssignMaxAttempts="${GATEWAY_IDENTITY_ASSIGN_MAX_ATTEMPTS:-20}"
+gatewayIdentityAssignSleepSeconds="${GATEWAY_IDENTITY_ASSIGN_SLEEP_SECONDS:-15}"
+
+if [ "$gatewayIdentityAssignSleepSeconds" -le 0 ] 2>/dev/null; then
+    echo "$(date) - ERROR: GATEWAY_IDENTITY_ASSIGN_SLEEP_SECONDS must be > 0"
+    exit 1
+fi
+
+echo "$(date) - gateway identity assignment retry settings: attempts=$gatewayIdentityAssignMaxAttempts sleep=${gatewayIdentityAssignSleepSeconds}s"
+
+# Wait for RBAC role assignment visibility in ARM graph (eventual consistency)
+wait_for_role_assignment() {
+    local assigneeObjectId="$1"
+    local roleDefinitionId="$2"
+    local scope="$3"
+    local maxAttempts="$rbacPropagationMaxAttempts"
+    local sleepSeconds="$rbacPropagationSleepSeconds"
+    local attempt=1
+
+    while [ $attempt -le $maxAttempts ]; do
+        assignmentId=$(az role assignment list \
+            --assignee-object-id "$assigneeObjectId" \
+            --role "$roleDefinitionId" \
+            --scope "$scope" \
+            --query "[0].id" -o tsv 2>/dev/null)
+
+        if [ -n "$assignmentId" ]; then
+            return 0
+        fi
+
+        echo "$(date) - waiting for role assignment propagation (attempt $attempt/$maxAttempts)"
+        sleep "$sleepSeconds"
+        attempt=$((attempt + 1))
+    done
+
+    return 1
+}
+
+assign_gateway_identity_with_retry() {
+    local resourceGroup="$1"
+    local gatewayName="$2"
+    local userAssignedIdentityId="$3"
+    local attempt=1
+
+    while [ $attempt -le "$gatewayIdentityAssignMaxAttempts" ]; do
+        assignError=$(az network vnet-gateway identity assign \
+            --resource-group "$resourceGroup" \
+            --name "$gatewayName" \
+            --user-assigned "$userAssignedIdentityId" \
+            --output none 2>&1)
+
+        if [ $? -eq 0 ]; then
+            return 0
+        fi
+
+        if echo "$assignError" | grep -q "AnotherOperationInProgress"; then
+            echo "$(date) - gateway operation in progress, retrying identity assignment (attempt $attempt/$gatewayIdentityAssignMaxAttempts)"
+            sleep "$gatewayIdentityAssignSleepSeconds"
+            attempt=$((attempt + 1))
+            continue
+        fi
+
+        echo "$assignError"
+        return 1
+    done
+
+    return 1
+}
 
 # Create Resource Group
 echo "$(date) - Creating Resource Group"
@@ -62,7 +148,7 @@ else
     az network vnet create \
         --resource-group "$rgName" \
         --name "$vnet1Name" \
-        --address-prefix "$vnet1Address" \
+        --address-prefix "$vnetAddress" \
         --location "$location"
     
     # Add Subnets
@@ -92,13 +178,13 @@ gw1UserIdentityId=$(az identity show --resource-group "$rgName" --name "$gw1User
 gw1UserIdentityPrincipalId=$(az identity show --resource-group "$rgName" --name "$gw1UserIdentityName" --query principalId -o tsv)
 
 # Create Key Vault with RBAC enabled
+echo "$(date) - Creating Key Vault: $keyVault1Name"
 if ! az keyvault show --name "$keyVault1Name" --resource-group "$rgName" &>/dev/null; then
-    echo "$(date) - clearing any older Key Vaults (this may take 30 seconds or more)."
-    # Purge soft-deleted key vaults
-    deletedVaults=$(az keyvault list-deleted --query "[].name" -o tsv)
-    for vault in $deletedVaults; do
-        az keyvault purge --name "$vault" 2>/dev/null || true
-    done
+    deletedVaultExists=$(az keyvault list-deleted --query "[?name=='$keyVault1Name'] | length(@)" -o tsv 2>/dev/null)
+    if [ "$deletedVaultExists" = "1" ]; then
+        echo "$(date) - clearing soft-deleted Key Vault with the same name: $keyVault1Name"
+        az keyvault purge --name "$keyVault1Name" 2>/dev/null || true
+    fi
     echo "$(date) - creating new Key Vault with RBAC enabled"
     az keyvault create --name "$keyVault1Name" --resource-group "$rgName" --location "$location"
 else
@@ -113,13 +199,35 @@ echo "$(date) - granting managed identity RBAC access to Key Vault: $keyVault1Na
 
 # Assign "Key Vault Secrets User" role (for get/list secrets)
 secretsUserRoleId="4633458b-17de-408a-b874-0445c86b69e6"
-az role assignment create --assignee-object-id "$gw1UserIdentityPrincipalId" --assignee-principal-type ServicePrincipal \
-    --role "$secretsUserRoleId" --scope "$keyVaultResourceId" 2>/dev/null || true
+existingSecretsAssignment=$(az role assignment list --assignee-object-id "$gw1UserIdentityPrincipalId" --role "$secretsUserRoleId" --scope "$keyVaultResourceId" --query "[0].id" -o tsv)
+if [ -z "$existingSecretsAssignment" ]; then
+    echo "$(date) - creating role assignment: Key Vault Secrets User"
+    az role assignment create --assignee-object-id "$gw1UserIdentityPrincipalId" --assignee-principal-type ServicePrincipal \
+        --role "$secretsUserRoleId" --scope "$keyVaultResourceId" --output none
+fi
+
+if wait_for_role_assignment "$gw1UserIdentityPrincipalId" "$secretsUserRoleId" "$keyVaultResourceId"; then
+    echo "$(date) - verified role assignment: Key Vault Secrets User"
+else
+    echo "$(date) - ERROR: role assignment not visible after wait: Key Vault Secrets User"
+    exit 1
+fi
 
 # Assign "Key Vault Certificate User" role (for get/list certificates)
 certUserRoleId="db79e9a7-68ee-4b58-9aeb-b90e7c24fcba"
-az role assignment create --assignee-object-id "$gw1UserIdentityPrincipalId" --assignee-principal-type ServicePrincipal \
-    --role "$certUserRoleId" --scope "$keyVaultResourceId" 2>/dev/null || true
+existingCertUserAssignment=$(az role assignment list --assignee-object-id "$gw1UserIdentityPrincipalId" --role "$certUserRoleId" --scope "$keyVaultResourceId" --query "[0].id" -o tsv)
+if [ -z "$existingCertUserAssignment" ]; then
+    echo "$(date) - creating role assignment: Key Vault Certificate User"
+    az role assignment create --assignee-object-id "$gw1UserIdentityPrincipalId" --assignee-principal-type ServicePrincipal \
+        --role "$certUserRoleId" --scope "$keyVaultResourceId" --output none
+fi
+
+if wait_for_role_assignment "$gw1UserIdentityPrincipalId" "$certUserRoleId" "$keyVaultResourceId"; then
+    echo "$(date) - verified role assignment: Key Vault Certificate User"
+else
+    echo "$(date) - ERROR: role assignment not visible after wait: Key Vault Certificate User"
+    exit 1
+fi
 
 echo "$(date) - RBAC role assignments created for managed identity"
 
@@ -138,13 +246,17 @@ existingAssignment=$(az role assignment list --assignee "$currentUserObjectId" -
 if [ -z "$existingAssignment" ]; then
     echo "$(date) - Creating Role assignment for current user to Key Vault Certificates Officer role"
     az role assignment create --assignee-object-id "$currentUserObjectId" --assignee-principal-type User \
-        --role "$certOfficerRoleId" --scope "$keyVaultResourceId"
+        --role "$certOfficerRoleId" --scope "$keyVaultResourceId" --output none
     echo "$(date) - Role assignment created"
-    # Wait for access policy propagation
-    echo "$(date) - waiting 30 seconds for access policy changes to propagate..."
-    sleep 30
 else
     echo "$(date) - Role assignment already exists, skipping"
+fi
+
+if wait_for_role_assignment "$currentUserObjectId" "$certOfficerRoleId" "$keyVaultResourceId"; then
+    echo "$(date) - verified role assignment: Key Vault Certificates Officer"
+else
+    echo "$(date) - ERROR: role assignment not visible after wait: Key Vault Certificates Officer"
+    exit 1
 fi
 
 echo "$(date) - RBAC role assignment created for user: $currentUser"
@@ -168,8 +280,11 @@ else
         exit 1
     fi
 fi
+# Create public IP1 for the VPN gateway
+gw1pubIP1Name="${gw1Name}pip1"
 
 # Create public IP for VPN Gateway
+echo "$(date) - getting public ip exists: $gw1pubIP1Name"
 if az network public-ip show --resource-group "$rgName" --name "$gw1pubIP1Name" &>/dev/null; then
     echo "$(date) - public ip exists, skipping: $gw1pubIP1Name"
 else
@@ -184,6 +299,24 @@ else
     echo "$(date) - public ip created: $gw1pubIP1Name"
 fi
 
+# Create public IP2 for the VPN gateway
+gw1pubIP2Name="${gw1Name}pip2"
+# Create public IP for VPN Gateway
+echo "$(date) - getting public ip exists: $gw1pubIP2Name"
+if az network public-ip show --resource-group "$rgName" --name "$gw1pubIP2Name" &>/dev/null; then
+    echo "$(date) - public ip exists, skipping: $gw1pubIP2Name"
+else
+    az network public-ip create \
+        --resource-group "$rgName" \
+        --name "$gw1pubIP2Name" \
+        --location "$location" \
+        --allocation-method Static \
+        --sku Standard \
+        --tier Regional \
+        --zone 1 2 3
+    echo "$(date) - public ip created: $gw1pubIP2Name"
+fi
+
 # Create VirtualNetworkGateway with managed identity
 echo "$(date) - checking if the vpn gateway exists: $gw1Name"
 if az network vnet-gateway show --resource-group "$rgName" --name "$gw1Name" &>/dev/null; then
@@ -194,23 +327,45 @@ else
         --resource-group "$rgName" \
         --name "$gw1Name" \
         --location "$location" \
-        --public-ip-address "$gw1pubIP1Name" \
+        --public-ip-addresses "$gw1pubIP1Name" "$gw1pubIP2Name" \
         --vnet "$vnet1Name" \
         --gateway-type Vpn \
         --vpn-type RouteBased \
         --sku VpnGw2AZ \
-        --vpn-gateway-generation Generation2 \
-        --no-wait false
+        --vpn-gateway-generation Generation2
+
+    az network vnet-gateway wait \
+        --resource-group "$rgName" \
+        --name "$gw1Name" \
+        --created
+
     echo "$(date) - vpn gateway created: $gw1Name"
 fi
 
 # Update VPN gateway with managed identity
 echo "$(date) - updating vpn gateway with managed identity"
-az network vnet-gateway update \
-    --resource-group "$rgName" \
-    --name "$gw1Name" \
-    --set "identity.type=UserAssigned" \
-    --set "identity.userAssignedIdentities.\"$gw1UserIdentityId\"={}" 2>/dev/null || true
+if assign_gateway_identity_with_retry "$rgName" "$gw1Name" "$gw1UserIdentityId"; then
+    az network vnet-gateway wait \
+        --resource-group "$rgName" \
+        --name "$gw1Name" \
+        --updated
+
+    identityAssigned=$(az network vnet-gateway show \
+        --resource-group "$rgName" \
+        --name "$gw1Name" \
+        --query "contains(keys(identity.userAssignedIdentities), '$gw1UserIdentityId')" \
+        -o tsv)
+
+    if [ "$identityAssigned" = "true" ]; then
+        echo "$(date) - managed identity assigned successfully: $gw1UserIdentityId"
+    else
+        echo "$(date) - ERROR: managed identity assignment not found on gateway"
+        exit 1
+    fi
+else
+    echo "$(date) - ERROR: failed to update vpn gateway identity"
+    exit 1
+fi
 
 gw1ProvisioningState=$(az network vnet-gateway show --resource-group "$rgName" --name "$gw1Name" --query provisioningState -o tsv)
 echo "$(date) - vpn gateway status: $gw1ProvisioningState"
