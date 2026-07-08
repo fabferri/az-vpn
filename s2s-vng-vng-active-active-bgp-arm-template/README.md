@@ -1,23 +1,22 @@
 <properties
-pageTitle= 'ARM template to create Site-to-Site VPN between two Azure VPN Gateways'
+pageTitle= 'ARM template to create Site-to-Site VPN between two Azure VPN Gateways in active-active mode'
 description= "ARM template to create Site-to-Site VPN between two Azure VPN Gateways"
 documentationcenter: na
 services="Azure VPN Gateway"
-documentationCenter="na"
-authors="fabferri"
-manager=""
-editor=""/>
+documentationCenter="(https://github.com/fabferri)"
+authors="fabferri"/>
 
 <tags
-   ms.service="configuration-Example-Azure"
-   ms.devlang="na"
-   ms.topic="article"
-   ms.tgt_pltfrm="na"
-   ms.workload="na"
-   ms.date="11/08/2021"
-   ms.author="fabferri" />
+   service="configuration-Example-Azure"
+   devlang="ARM template"
+   topic="article"
+   tgt_pltfrm="Azure"
+   workload="Azure VPN Gateway"
+   date="08/07/2026"
+   repository="https://github.com/fabferri"
+   author="fabferri" />
 
-## ARM template to create Site-to-Site VPN between two VPN Gateways
+## ARM template to create Site-to-Site VPN between two VPN Gateways in active-active mode
 
 This article contains an ARM template to create to vnets, vnet1 and vnet2, connected through site-to-site VPN. <br>
 Two IPsec tunnels are established between the Azure VPN gateways deployed with zonal gateways (SKU: **"VpnGw1AZ", "VpnGw2AZ", "VpnGw3AZ", "VpnGw4AZ", "VpnGw5AZ"**). <br>
@@ -157,6 +156,8 @@ az network vnet-gateway list-advertised-routes -n $vpnName -g $rgName --peer $pe
 `date: 11-02-2024` <br>
 `date: 09-09-2025` <br>
 `date: 05-02-2025` <br>
+`date: 05-02-2025` <br>
+`date: 08-07-2026` <br>
 
 <!--Image References-->
 
