@@ -2,6 +2,10 @@
 # Script to create VPN Gateway with certificate authentication using managed identity and Key Vault
 # The script creates a managed identity with readonly access to Key Vault integration to access the digital certificate required to establish a Connection
 # $subscriptionName and $rgName collected by "init.json" file
+# NOTE: This script includes retry logic for Key Vault certificate import to handle RBAC propagation lag.
+#       Azure RBAC is eventually consistent: role assignments may be visible in ARM API but not yet
+#       enforced on Key Vault's data-plane. Certificate import is retried on ForbiddenByRbac errors
+#       with configurable backoff (default: 12 attempts × 5s = 60s tolerance).
 
 vnet1Name='vnet1'
 gw1Name='gw1'
@@ -70,7 +74,10 @@ fi
 
 echo "$(date) - gateway identity assignment retry settings: attempts=$gatewayIdentityAssignMaxAttempts sleep=${gatewayIdentityAssignSleepSeconds}s"
 
-# Wait for RBAC role assignment visibility in ARM graph (eventual consistency)
+# Wait for RBAC role assignment visibility in ARM graph (eventual consistency).
+# NOTE: This function only waits for ARM API visibility. Key Vault data-plane enforcement may
+#       lag further behind and reject operations with ForbiddenByRbac. Callers must implement
+#       their own retry logic for data-plane operations (e.g., certificate import, secret get).
 wait_for_role_assignment() {
     local assigneeObjectId="$1"
     local roleDefinitionId="$2"
@@ -261,18 +268,45 @@ fi
 
 echo "$(date) - RBAC role assignment created for user: $currentUser"
 
-# Import certificate in keyvault
+# Import certificate in keyvault.
+# IMPORTANT: Even after wait_for_role_assignment confirms the role is visible in ARM,
+#            Key Vault's data-plane RBAC enforcement may lag by several additional seconds.
+#            Certificate import is wrapped in a retry loop that tolerates ForbiddenByRbac errors
+#            and retries with exponential backoff. Other errors are fatal.
 cert1FilePath="$pathFiles/certs/s2s-cert1.pfx"
 if az keyvault certificate show --vault-name "$keyVault1Name" --name "$gw1OutboundCertName" &>/dev/null; then
     echo "$(date) - certificate already exists in keyvault, skipping: $gw1OutboundCertName"
 else
     echo "$(date) - importing certificate in keyvault: $keyVault1Name"
     if [ -f "$cert1FilePath" ]; then
-        az keyvault certificate import \
-            --vault-name "$keyVault1Name" \
-            --name "$gw1OutboundCertName" \
-            --file "$cert1FilePath" \
-            --password "12345"
+        importAttempt=1
+        importMaxAttempts=$rbacPropagationMaxAttempts
+        importSleepSeconds=$rbacPropagationSleepSeconds
+        importSuccess=false
+        while [ $importAttempt -le $importMaxAttempts ]; do
+            importError=$(az keyvault certificate import \
+                --vault-name "$keyVault1Name" \
+                --name "$gw1OutboundCertName" \
+                --file "$cert1FilePath" \
+                --password "12345" 2>&1)
+            if [ $? -eq 0 ]; then
+                importSuccess=true
+                break
+            fi
+            if echo "$importError" | grep -qE "ForbiddenByRbac|Forbidden"; then
+                echo "$(date) - certificate import forbidden (RBAC propagation lag), retrying (attempt $importAttempt/$importMaxAttempts)"
+                sleep "$importSleepSeconds"
+                importAttempt=$((importAttempt + 1))
+            else
+                echo "$importError"
+                echo "$(date) - ERROR: certificate import failed with unexpected error"
+                exit 1
+            fi
+        done
+        if [ "$importSuccess" != "true" ]; then
+            echo "$(date) - ERROR: certificate import failed after $importMaxAttempts attempts (RBAC propagation timeout)"
+            exit 1
+        fi
         echo "$(date) - certificate imported successfully: $gw1OutboundCertName"
     else
         echo "$(date) - ERROR: certificate file not found: $cert1FilePath"

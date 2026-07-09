@@ -1,5 +1,14 @@
 #!/bin/bash
-# Script to create VPN Gateway Connections with certificate authentication
+# Script to create VPN Gateway Connections with certificate authentication.
+# This script establishes site-to-site VPN connections between two gateways (gw1 and gw2)
+# using certificate-based authentication. It:
+#   1. Retrieves gateway public IPs and verifies provisioning state
+#   2. Ensures managed identities are attached to gateways for Key Vault certificate access
+#   3. Verifies Key Vault certificate roles are assigned to identities
+#   4. Creates or updates local network gateways for routing configuration
+#   5. Fetches certificates from Key Vault and creates/updates VPN connections
+# NOTE: Azure RBAC is eventually consistent. Role assignments verified in this script
+#       may take additional time to propagate to Key Vault's data-plane enforcement.
 
 # Address space for the virtual networks
 vnet1Address='10.1.0.0/16'
@@ -149,9 +158,12 @@ ensure_gateway_identity() {
     fi
 }
 
-ensure_gateway_identity "$gw1Name" "$gw1UserIdentityName"
-ensure_gateway_identity "$gw2Name" "$gw2UserIdentityName"
-
+# Ensure a managed identity has the required Key Vault Certificate User role on a vault.
+# This function verifies that the specified managed identity has the 'Key Vault Certificate User'
+# RBAC role assigned on the given Key Vault scope. If the role is not assigned, it creates the
+# assignment. This role is required for VPN gateways to read certificates from Key Vault.
+# NOTE: After role assignment, allow time for eventual consistency propagation before the
+#       gateway attempts to access certificates from Key Vault.
 ensure_keyvault_cert_role() {
     local identityName="$1"
     local vaultName="$2"
@@ -192,9 +204,14 @@ ensure_keyvault_cert_role() {
     fi
 }
 
+ensure_gateway_identity "$gw1Name" "$gw1UserIdentityName"
+ensure_gateway_identity "$gw2Name" "$gw2UserIdentityName"
+
 ensure_keyvault_cert_role "$gw1UserIdentityName" "$keyVault1Name"
 ensure_keyvault_cert_role "$gw2UserIdentityName" "$keyVault2Name"
 
+# Verify VPN Gateway2 deployment status
+echo "$(date) - verifying VPN Gateway2 deployment status"
 gw2State=$(az network vnet-gateway show --resource-group "$rgName" --name "$gw2Name" --query provisioningState -o tsv 2>/dev/null)
 if [ -z "$gw2State" ]; then
     echo "$(date) - ERROR: VPN Gateway2 '$gw2Name' not found"
@@ -207,6 +224,9 @@ fi
 echo "$(date) - VPN Gateway2 status: $gw2State"
 
 # Ensure local network gateways match the desired remote gateway IP and address space.
+# Local network gateways represent the remote VPN endpoints. This function creates the
+# local gateway if it doesn't exist, or updates it if the remote IP address or address
+# prefixes have changed. These gateways are used as targets for VPN connections.
 ensure_local_gateway() {
     local name="$1"
     local prefixes="$2"
@@ -310,6 +330,13 @@ if [ -z "$gw1OutboundCertUrl" ] || [ -z "$gw2OutboundCertUrl" ] || [ -z "$inboun
     exit 1
 fi
 
+# Ensure a VPN connection exists and is configured with certificate-based authentication.
+# This function creates a new VPN connection or updates an existing one to use certificate auth.
+# It handles transient errors (GatewayBusy, AnotherOperationInProgress, RBAC lag) with retries,
+# and waits for the authentication type to propagate from ARM to the API response (eventual consistency).
+# On success, the connection's authenticationType is verified to be "Certificate" before returning.
+# NOTE: Certificate auth configuration may lag in visibility; this function probes the connection
+#       state after creation/update to ensure the auth type has propagated to the data-plane.
 ensure_connection_cert_auth() {
     local connectionName="$1"
     local gatewayName="$2"

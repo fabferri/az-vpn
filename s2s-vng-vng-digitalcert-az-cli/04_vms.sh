@@ -1,12 +1,23 @@
 #!/bin/bash
 ###
-### Bash script to create Azure VNet and Azure VM
-### The script uses a function to create VNet and Azure VM
-### when the function to create the VM is invoked, it checks the existence of the Azure VNet
-### If the Azure VNet doesn't exist, the script creates it.
+### Bash script to create Azure Virtual Networks and Azure VMs for site-to-site VPN testing.
+### This script provisions two VNets (vnet1 and vnet2) with VMs, Network Security Groups,
+### and Public IPs. Each VNet includes a GatewaySubnet for VPN gateway integration.
+### The script uses a reusable CreateVM function that checks for resource existence before creation.
+### Optionally, it can run a remote nginx installation script on created VMs for testing.
+### NOTE: Credentials (adminUsername, adminPassword) are read from init.json and must be secure.
 ###
 
 ## Function to create the Azure VM ##
+## This function provisions a complete VM with networking stack including:
+##   1. Resource Group (creates if not exists)
+##   2. Network Security Group with SSH inbound rule (port 22)
+##   3. Public IP for VM access
+##   4. Virtual Network with two subnets (application subnet and gateway subnet)
+##   5. Network Interface Card (NIC) attached to the application subnet
+##   6. VM with specified image and size
+## The function is idempotent: it skips creation if resources already exist.
+## For existing VNets, it ensures both required subnets are present.
 CreateVM() {
     local rgName="$1"
     local location="$2"
@@ -177,6 +188,15 @@ CreateVM() {
     fi
 }
 
+# Run a remote installation script on a VM.
+# This function uses 'az vm run-command invoke' to execute a shell script on the target VM.
+# It installs and verifies nginx, enabling the VM for HTTP/HTTPS testing over the VPN connection.
+# The function:
+#   1. Runs apt-get to install nginx
+#   2. Enables nginx to start on boot
+#   3. Restarts nginx
+#   4. Verifies nginx is installed and running (exits with code 10 if missing, 11 if not running)
+# If verification fails, the script exits with an error.
 run_remote_script_on_vm() {
     local rgName="$1"
     local vmName="$2"
@@ -212,6 +232,13 @@ run_remote_script_on_vm() {
 }
 
 ################### Start of the main script ###################
+## This section:
+##   1. Reads subscription and VM configuration from init.json
+##   2. Validates that all required parameters are present (non-null)
+##   3. Creates two VNets and VMs for site-to-site VPN testing
+##   4. Optionally runs the remote nginx install script on each VM
+##   5. RUN_REMOTE_SCRIPT environment variable can override the default behavior
+##
 pathFiles="$(dirname "$0")"
 inputParams='init.json'
 inputParamsFile="$pathFiles/$inputParams"
